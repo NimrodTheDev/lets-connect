@@ -13,6 +13,7 @@ import {
   getRatingForJob,
   fileDispute,
   uploadPublicFile,
+  revealJobPhone,
 } from "../db.js";
 import { escapeHtml, timeAgo, badgeHtml, toast, confirmDialog, openModal, closeModal, photoGridHtml } from "../ui.js";
 import { navigate } from "../router.js";
@@ -44,6 +45,13 @@ export async function renderJobDetail({ id }) {
   const isCustomer = job.customer_id === state.user.id;
   const isAcceptedPro = job.accepted_pro_id === state.user.id;
   const isOutsidePro = !isCustomer && !isAcceptedPro;
+  // The number itself is never in `job` — it is fetched on demand through
+  // reveal_job_phone(), which re-checks all of this server-side and logs the
+  // reveal. This flag only decides whether to offer the button.
+  const canRevealPhone =
+    (isCustomer || isAcceptedPro) &&
+    !!job.accepted_pro_id &&
+    ["accepted", "in_progress", "completed", "disputed"].includes(job.status);
 
   document.getElementById("app").innerHTML = `
     <div class="container-narrow">
@@ -80,10 +88,13 @@ export async function renderJobDetail({ id }) {
           <div class="kv-row"><span class="muted">Posted by</span><span>${job.customer ? escapeHtml(job.customer.full_name) : "—"}</span></div>
           ${job.pro ? `<div class="kv-row"><span class="muted">Accepted pro</span><span>${escapeHtml(job.pro.full_name)}</span></div>` : ""}
           ${
-            (isCustomer || isAcceptedPro) && job.status !== "open" && (job.pro?.phone || job.customer?.phone)
-              ? `<div class="kv-row"><span class="muted">Contact phone</span><span>${escapeHtml(
-                  isCustomer ? job.pro?.phone || "—" : job.customer?.phone || "—"
-                )}</span></div>`
+            canRevealPhone
+              ? `<div class="kv-row">
+                  <span class="muted">Contact phone</span>
+                  <span id="phoneReveal">
+                    <button class="btn btn-sm" id="revealPhoneBtn">Reveal phone number</button>
+                  </span>
+                </div>`
               : ""
           }
         </div>
@@ -124,6 +135,25 @@ export async function renderJobDetail({ id }) {
         document.getElementById("jobPhotosArea").innerHTML = photoGridHtml(urls.map((url, i) => ({ url, key: i })));
       } catch (err) {
         toast(err.message || "Could not save photos", "error");
+      }
+    });
+  }
+
+  const revealBtn = document.getElementById("revealPhoneBtn");
+  if (revealBtn) {
+    revealBtn.addEventListener("click", async () => {
+      revealBtn.disabled = true;
+      revealBtn.textContent = "Revealing…";
+      try {
+        const contact = await revealJobPhone(job.id);
+        const target = document.getElementById("phoneReveal");
+        if (target) {
+          target.innerHTML = `<a href="tel:${escapeHtml(contact.phone)}">${escapeHtml(contact.phone)}</a>`;
+        }
+      } catch (err) {
+        toast(err.message || "Could not get that phone number", "error");
+        revealBtn.disabled = false;
+        revealBtn.textContent = "Reveal phone number";
       }
     });
   }

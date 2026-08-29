@@ -7,6 +7,7 @@ import {
   listProPhotos,
   addProPhoto,
   deleteProPhoto,
+  saveMyPhone,
 } from "../db.js";
 import { toast, escapeHtml, avatarHtml, photoGridHtml } from "../ui.js";
 import { navigate } from "../router.js";
@@ -60,7 +61,7 @@ export async function renderProfileEdit() {
         </div>
         <div class="field">
           <label>Phone</label>
-          <input type="tel" id="phone" value="${escapeHtml(state.profile?.phone || "")}" />
+          <input type="tel" id="phone" value="${escapeHtml(state.myPhone || "")}" />
         </div>
 
         <div class="field">
@@ -313,9 +314,10 @@ async function save() {
       avatar_url = url;
     }
 
+    state.myPhone = await saveMyPhone(state.user.id, document.getElementById("phone").value.trim());
+
     state.profile = await upsertProfile(state.user.id, {
       full_name: document.getElementById("fullName").value.trim(),
-      phone: document.getElementById("phone").value.trim(),
       is_pro: isPro,
       lat: picked.lat,
       lng: picked.lng,

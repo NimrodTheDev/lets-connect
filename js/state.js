@@ -5,6 +5,7 @@ export const state = {
   user: null, // auth user
   profile: null, // row from public.profiles
   proDetails: null, // row from public.pro_details (if is_pro)
+  myPhone: "", // own number from public.user_phones (never on `profile`)
   myLocation: null, // { lat, lng } best-known current location
   radiusKm: null, // set from config default at boot
 };

@@ -8,8 +8,24 @@ import {
   upsertProfile,
   upsertProDetails,
   getProDetails,
+  setUserSuspended,
+  listPhoneRevealsAdmin,
+  listProPhotos,
+  deleteProPhoto,
+  updateJob,
 } from "../db.js";
-import { escapeHtml, timeAgo, badgeHtml, toast, loadingScreen, emptyState, avatarHtml } from "../ui.js";
+import {
+  escapeHtml,
+  timeAgo,
+  badgeHtml,
+  toast,
+  loadingScreen,
+  emptyState,
+  avatarHtml,
+  openModal,
+  closeModal,
+  confirmDialog,
+} from "../ui.js";
 import { navigate } from "../router.js";
 import {
   JOB_STATUS_LABELS,
@@ -53,6 +69,7 @@ export async function renderAdmin() {
         <div class="tab" data-tab="disputes">Appeals</div>
         <div class="tab" data-tab="jobs">Jobs</div>
         <div class="tab" data-tab="users">Users</div>
+        <div class="tab" data-tab="reveals">Phone log</div>
         <div class="tab" data-tab="demo">Demo &amp; testing</div>
       </div>
       <div id="adminBody">${loadingScreen("Loading data…")}</div>
@@ -111,6 +128,7 @@ function renderActiveTab() {
   if (activeTab === "disputes") renderDisputesTab();
   else if (activeTab === "jobs") renderJobsTab();
   else if (activeTab === "users") renderUsersTab();
+  else if (activeTab === "reveals") renderRevealsTab();
   else renderDemoTab();
 }
 
@@ -199,7 +217,7 @@ function renderJobsTab() {
   body.innerHTML = cache.jobs
     .map(
       (j) => `
-    <a href="#/job/${j.id}" class="card card-link">
+    <div class="card" data-job="${escapeHtml(j.id)}">
       <div class="row" style="align-items:flex-start;">
         <div class="col">
           <div class="row" style="align-items:center;gap:8px;flex-wrap:wrap;">
@@ -214,9 +232,23 @@ function renderJobsTab() {
           ${j.offer_amount ? `<strong>${formatCurrency(j.offer_amount)}</strong>` : ""}
         </div>
       </div>
-    </a>`
+      <div class="row wrap" style="gap:8px;margin-top:10px;">
+        <a href="#/job/${escapeHtml(j.id)}" class="btn btn-sm">View job</a>
+        ${
+          (j.photo_urls || []).length
+            ? `<button class="btn btn-sm" data-action="job-photos">Review ${j.photo_urls.length} photo${j.photo_urls.length === 1 ? "" : "s"}</button>`
+            : ""
+        }
+      </div>
+    </div>`
     )
     .join("");
+
+  body.querySelectorAll("[data-job]").forEach((card) => {
+    const job = cache.jobs.find((j) => j.id === card.dataset.job);
+    const btn = card.querySelector('[data-action="job-photos"]');
+    if (job && btn) btn.addEventListener("click", () => openJobPhotoModal(job));
+  });
 }
 
 // ---------------- Users ----------------
@@ -227,26 +259,261 @@ function renderUsersTab() {
     return;
   }
   body.innerHTML = cache.users
-    .map(
-      (u) => `
-    <a href="#/profile/${u.id}" class="card card-link">
+    .map((u) => {
+      // Admins are allowed to read user_phones; everyone else is not.
+      // PostgREST returns a to-one embed as an object, but tolerate an array
+      // so a relationship-detection change can't silently blank the column.
+      const phoneRow = Array.isArray(u.user_phones) ? u.user_phones[0] : u.user_phones;
+      const phone = phoneRow?.phone || "";
+      return `
+    <div class="card" data-user="${escapeHtml(u.id)}">
       <div class="row" style="align-items:center;gap:12px;">
         ${avatarHtml(u.full_name, u.avatar_color, "avatar-sm", u.avatar_url)}
         <div class="col">
-          <div class="row" style="align-items:center;gap:8px;">
+          <div class="row" style="align-items:center;gap:8px;flex-wrap:wrap;">
             <strong>${escapeHtml(u.full_name || "Unnamed")}</strong>
             ${u.is_pro ? `<span class="badge badge-open">Pro</span>` : ""}
             ${u.is_admin ? `<span class="badge badge-accepted">Admin</span>` : ""}
+            ${u.is_suspended ? `<span class="badge badge-disputed">Suspended</span>` : ""}
           </div>
           <div class="tiny muted" style="margin-top:2px;">
-            ${u.phone ? escapeHtml(u.phone) + " · " : ""}joined ${timeAgo(u.created_at)}
+            ${phone ? escapeHtml(phone) + " · " : ""}joined ${timeAgo(u.created_at)}
           </div>
+          ${
+            u.is_suspended && u.suspended_reason
+              ? `<div class="tiny muted" style="margin-top:2px;">Reason: ${escapeHtml(u.suspended_reason)}</div>`
+              : ""
+          }
         </div>
         ${u.pro_details?.rate_amount ? `<div class="tiny"><strong>${formatCurrency(u.pro_details.rate_amount)}</strong></div>` : ""}
       </div>
-    </a>`
+      <div class="row wrap" style="gap:8px;margin-top:10px;">
+        <a href="#/profile/${escapeHtml(u.id)}" class="btn btn-sm">View profile</a>
+        ${u.is_pro ? `<button class="btn btn-sm" data-action="photos">Review photos</button>` : ""}
+        ${
+          u.is_admin
+            ? `<span class="tiny muted" style="align-self:center;">Admin accounts can't be suspended here</span>`
+            : `<button class="btn btn-sm ${u.is_suspended ? "" : "btn-danger"}" data-action="suspend">${
+                u.is_suspended ? "Lift suspension" : "Suspend"
+              }</button>`
+        }
+      </div>
+    </div>`;
+    })
+    .join("");
+
+  body.querySelectorAll("[data-user]").forEach((card) => {
+    const user = cache.users.find((u) => u.id === card.dataset.user);
+    if (!user) return;
+
+    const photosBtn = card.querySelector('[data-action="photos"]');
+    if (photosBtn) photosBtn.addEventListener("click", () => openPhotoModerationModal(user));
+
+    const suspendBtn = card.querySelector('[data-action="suspend"]');
+    if (suspendBtn) {
+      suspendBtn.addEventListener("click", () =>
+        user.is_suspended ? liftSuspension(user) : openSuspendModal(user)
+      );
+    }
+  });
+}
+
+function openSuspendModal(user) {
+  const modal = openModal(`
+    <div class="modal-head"><h3>Suspend ${escapeHtml(user.full_name || "this user")}</h3><button class="modal-close" id="closeSuspendModal">×</button></div>
+    <p class="small muted">
+      A suspended account is blocked by the database from posting jobs, starting
+      conversations, sending messages, and uploading photos. They can still sign
+      in and read what they already have.
+    </p>
+    <form id="suspendForm" class="stack">
+      <div class="field">
+        <label>Reason (kept for your records)</label>
+        <textarea id="suspendReason" placeholder="Why is this account being suspended?"></textarea>
+      </div>
+      <button class="btn btn-danger btn-block" type="submit">Suspend account</button>
+    </form>
+  `);
+  modal.querySelector("#closeSuspendModal").addEventListener("click", closeModal);
+  modal.querySelector("#suspendForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const reason = document.getElementById("suspendReason").value.trim();
+    try {
+      const updated = await setUserSuspended(user.id, true, reason);
+      applyUserUpdate(user.id, updated);
+      closeModal();
+      toast(`${user.full_name || "Account"} suspended.`, "success");
+      renderUsersTab();
+    } catch (err) {
+      toast(err.message || "Could not suspend that account", "error");
+    }
+  });
+}
+
+async function liftSuspension(user) {
+  if (!(await confirmDialog(`Lift the suspension on ${user.full_name || "this account"}?`))) return;
+  try {
+    const updated = await setUserSuspended(user.id, false, null);
+    applyUserUpdate(user.id, updated);
+    toast("Suspension lifted.", "success");
+    renderUsersTab();
+  } catch (err) {
+    toast(err.message || "Could not lift the suspension", "error");
+  }
+}
+
+// The database silently reverts a suspension write it doesn't accept, so trust
+// the row that comes back rather than what we asked for.
+function applyUserUpdate(userId, updated) {
+  const idx = cache.users.findIndex((u) => u.id === userId);
+  if (idx < 0 || !updated) return;
+  cache.users[idx] = { ...cache.users[idx], ...updated };
+}
+
+// ---------------- Photo moderation ----------------
+async function openPhotoModerationModal(user) {
+  const modal = openModal(`
+    <div class="modal-head"><h3>Photos by ${escapeHtml(user.full_name || "this pro")}</h3><button class="modal-close" id="closePhotoModal">×</button></div>
+    <div id="photoModBody">${loadingScreen("Loading photos…")}</div>
+  `);
+  modal.querySelector("#closePhotoModal").addEventListener("click", closeModal);
+
+  let photos = [];
+  try {
+    photos = await listProPhotos(user.id);
+  } catch (err) {
+    document.getElementById("photoModBody").innerHTML = emptyState("⚠️", "Could not load photos");
+    return;
+  }
+  renderPhotoModBody(photos);
+}
+
+function renderPhotoModBody(photos) {
+  const el = document.getElementById("photoModBody");
+  if (!el) return;
+  if (photos.length === 0) {
+    el.innerHTML = emptyState("🖼️", "No portfolio photos");
+    return;
+  }
+  el.innerHTML = photos
+    .map(
+      (ph) => `
+    <div class="row" data-photo="${escapeHtml(ph.id)}" style="align-items:center;gap:10px;margin-bottom:10px;">
+      <img src="${escapeHtml(ph.url)}" alt="" style="width:64px;height:64px;object-fit:cover;border-radius:8px;" />
+      <div class="col">
+        <div class="small">${escapeHtml(ph.caption || "No caption")}</div>
+        <div class="tiny muted">${timeAgo(ph.created_at)}</div>
+      </div>
+      <button class="btn btn-danger btn-sm" data-action="remove-photo">Remove</button>
+    </div>`
     )
     .join("");
+
+  el.querySelectorAll("[data-photo]").forEach((row) => {
+    row.querySelector('[data-action="remove-photo"]').addEventListener("click", async () => {
+      if (!(await confirmDialog("Remove this photo permanently?", { okLabel: "Remove", danger: true }))) return;
+      try {
+        await deleteProPhoto(row.dataset.photo);
+        toast("Photo removed.", "success");
+        renderPhotoModBody(photos.filter((ph) => ph.id !== row.dataset.photo));
+      } catch (err) {
+        toast(err.message || "Could not remove that photo", "error");
+      }
+    });
+  });
+}
+
+async function openJobPhotoModal(job) {
+  const urls = job.photo_urls || [];
+  const modal = openModal(`
+    <div class="modal-head"><h3>Photos on "${escapeHtml(job.title)}"</h3><button class="modal-close" id="closeJobPhotoModal">×</button></div>
+    <div id="jobPhotoModBody"></div>
+  `);
+  modal.querySelector("#closeJobPhotoModal").addEventListener("click", closeModal);
+  renderJobPhotoBody(job, urls);
+}
+
+function renderJobPhotoBody(job, urls) {
+  const el = document.getElementById("jobPhotoModBody");
+  if (!el) return;
+  if (urls.length === 0) {
+    el.innerHTML = emptyState("🖼️", "No photos on this job");
+    return;
+  }
+  el.innerHTML = urls
+    .map(
+      (url, i) => `
+    <div class="row" data-idx="${i}" style="align-items:center;gap:10px;margin-bottom:10px;">
+      <img src="${escapeHtml(url)}" alt="" style="width:64px;height:64px;object-fit:cover;border-radius:8px;" />
+      <div class="col tiny muted" style="word-break:break-all;">${escapeHtml(url)}</div>
+      <button class="btn btn-danger btn-sm" data-action="remove-job-photo">Remove</button>
+    </div>`
+    )
+    .join("");
+
+  el.querySelectorAll("[data-idx]").forEach((row) => {
+    row.querySelector('[data-action="remove-job-photo"]').addEventListener("click", async () => {
+      if (!(await confirmDialog("Remove this photo from the job?", { okLabel: "Remove", danger: true }))) return;
+      const next = urls.filter((_, i) => i !== Number(row.dataset.idx));
+      try {
+        await updateJob(job.id, { photo_urls: next });
+        job.photo_urls = next;
+        toast("Photo removed.", "success");
+        renderJobPhotoBody(job, next);
+      } catch (err) {
+        toast(err.message || "Could not remove that photo", "error");
+      }
+    });
+  });
+}
+
+// ---------------- Phone reveal log ----------------
+async function renderRevealsTab() {
+  const body = document.getElementById("adminBody");
+  body.innerHTML = loadingScreen("Loading phone log…");
+
+  let reveals = [];
+  try {
+    reveals = await listPhoneRevealsAdmin();
+  } catch (err) {
+    body.innerHTML = emptyState("⚠️", "Could not load the phone log");
+    return;
+  }
+
+  const intro = `
+    <div class="card" style="margin-bottom:16px;">
+      <strong>Who looked up whose number</strong>
+      <p class="small muted" style="margin-top:4px;">
+        Phone numbers are never sent to the browser with the rest of a job.
+        A participant has to press "Reveal phone number", which goes through a
+        database function that re-checks they're actually on the job and writes
+        the row below. There is no other way for one user to obtain another's
+        number, so this list is complete.
+      </p>
+    </div>`;
+
+  if (reveals.length === 0) {
+    body.innerHTML = intro + emptyState("📵", "No phone numbers revealed yet");
+    return;
+  }
+
+  body.innerHTML =
+    intro +
+    reveals
+      .map(
+        (r) => `
+    <div class="card card-tight">
+      <div class="row" style="align-items:center;gap:8px;flex-wrap:wrap;">
+        <strong>${escapeHtml(r.viewer?.full_name || "Someone")}</strong>
+        <span class="muted small">saw</span>
+        <strong>${escapeHtml(r.subject?.full_name || "someone")}</strong>
+      </div>
+      <div class="tiny muted" style="margin-top:2px;">
+        ${escapeHtml(r.job?.title || "job")} · ${timeAgo(r.created_at)}
+      </div>
+    </div>`
+      )
+      .join("");
 }
 
 // ---------------- Demo & testing ----------------

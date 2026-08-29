@@ -1,6 +1,6 @@
 import { state } from "./state.js";
 import { signOut } from "./db.js";
-import { toast } from "./ui.js";
+import { toast, escapeHtml } from "./ui.js";
 
 function linksHtml(path) {
   const items = state.user
@@ -22,7 +22,26 @@ function linksHtml(path) {
     .join("");
 }
 
+function renderSuspendedBanner() {
+  const el = document.getElementById("suspendedBanner");
+  if (!el) return;
+  if (!state.user || !state.profile?.is_suspended) {
+    el.hidden = true;
+    el.innerHTML = "";
+    return;
+  }
+  const reason = state.profile.suspended_reason;
+  el.innerHTML = `
+    <strong>Your account is suspended.</strong>
+    You can still sign in and read your existing jobs and messages, but posting
+    jobs, contacting people, and uploading photos are turned off.
+    ${reason ? `<div class="tiny" style="margin-top:4px;">Reason: ${escapeHtml(reason)}</div>` : ""}
+  `;
+  el.hidden = false;
+}
+
 export function renderNav() {
+  renderSuspendedBanner();
   const topbar = document.getElementById("topbar");
   const topnav = document.getElementById("topnav");
   const topnavMobile = document.getElementById("topnavMobile");

@@ -1,7 +1,7 @@
 // Minimal service worker — just enough to satisfy PWA installability
 // criteria and let the app shell load offline. Map tiles, Supabase calls,
 // etc. always go to the network; we don't try to cache live data.
-const CACHE_NAME = "ays-shell-v1";
+const CACHE_NAME = "ays-shell-v2";
 const SHELL_FILES = [
   "/",
   "/index.html",

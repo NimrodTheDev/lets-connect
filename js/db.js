@@ -89,6 +89,45 @@ export async function upsertProDetails(profileId, patch) {
   );
 }
 
+// ---------------- Phone numbers ----------------
+// Phone numbers deliberately do NOT live on `profiles`: that table is
+// readable by every authenticated user, so a column there is a column
+// everyone can scrape. They live in `user_phones`, whose RLS admits only the
+// owner and admins. A counterparty on a job gets the number from
+// revealJobPhone() below, never from a table read.
+export async function getMyPhone(profileId) {
+  const row = unwrap(
+    await sb.from("user_phones").select("phone").eq("profile_id", profileId).maybeSingle()
+  );
+  return row ? row.phone : "";
+}
+
+export async function saveMyPhone(profileId, phone) {
+  const trimmed = (phone || "").trim();
+  if (!trimmed) {
+    const { error } = await sb.from("user_phones").delete().eq("profile_id", profileId);
+    if (error) throw error;
+    return "";
+  }
+  unwrap(
+    await sb
+      .from("user_phones")
+      .upsert({ profile_id: profileId, phone: trimmed }, { onConflict: "profile_id" })
+      .select()
+      .maybeSingle()
+  );
+  return trimmed;
+}
+
+// Asks the database for the other party's number on a job. Participation and
+// job status are checked server-side, and every successful call is recorded
+// in `phone_reveals` — the client cannot read the number any other way, nor
+// skip the audit entry.
+export async function revealJobPhone(jobId) {
+  const rows = unwrap(await sb.rpc("reveal_job_phone", { p_job_id: jobId }));
+  return Array.isArray(rows) ? rows[0] : rows;
+}
+
 export async function listNearbyPros({ excludeId } = {}) {
   let q = sb
     .from("profiles")
@@ -133,7 +172,7 @@ export async function getJob(id) {
     await sb
       .from("jobs")
       .select(
-        "*, customer:profiles!customer_id(id, full_name, avatar_color, phone), pro:profiles!accepted_pro_id(id, full_name, avatar_color, phone)"
+        "*, customer:profiles!customer_id(id, full_name, avatar_color), pro:profiles!accepted_pro_id(id, full_name, avatar_color)"
       )
       .eq("id", id)
       .maybeSingle()
@@ -291,8 +330,38 @@ export async function listAllUsersAdmin() {
   return unwrap(
     await sb
       .from("profiles")
-      .select("*, pro_details(*)")
+      .select("*, pro_details(*), user_phones(phone)")
       .order("created_at", { ascending: false })
+  );
+}
+
+// Suspending an account is an admin-only write, enforced by RLS plus the
+// protect_privileged_profile_columns trigger — a non-admin who calls this
+// gets their change silently reverted by the database.
+export async function setUserSuspended(profileId, suspended, reason) {
+  return unwrap(
+    await sb
+      .from("profiles")
+      .update({
+        is_suspended: suspended,
+        suspended_at: suspended ? new Date().toISOString() : null,
+        suspended_reason: suspended ? reason || null : null,
+      })
+      .eq("id", profileId)
+      .select()
+      .maybeSingle()
+  );
+}
+
+export async function listPhoneRevealsAdmin(limit = 100) {
+  return unwrap(
+    await sb
+      .from("phone_reveals")
+      .select(
+        "*, job:jobs!job_id(title), viewer:profiles!revealed_to(full_name), subject:profiles!revealed_profile_id(full_name)"
+      )
+      .order("created_at", { ascending: false })
+      .limit(limit)
   );
 }
 

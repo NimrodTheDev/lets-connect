@@ -56,8 +56,35 @@ I also closed a gap that existed before this change: the profiles table's
 "update your own profile" RLS policy only checked *row ownership*, not which
 *columns* changed — so, in principle, any signed-in user could have called
 the Supabase client directly and set their own `is_admin` to `true`. I added
-a database trigger (`protect_is_admin_column_trigger`) that silently reverts
-any client-side change to `is_admin`, so that column can now only be changed
-via direct database access (e.g. me running SQL), never from the app or a
-hand-crafted API call. So yes — the admin tab, and everything behind it, is
-only available to you.
+a database trigger that silently reverts any client-side change to
+`is_admin`, so that column can now only be changed via direct database access
+(e.g. me running SQL), never from the app or a hand-crafted API call. So yes
+— the admin tab, and everything behind it, is only available to you.
+
+(That trigger is now called `protect_privileged_profile_columns_trigger` — it
+was renamed in the trust & safety phase below, when it grew to cover the
+account-suspension columns as well. Its behaviour for `is_admin` is
+unchanged.)
+
+## Trust & safety phase
+
+A later change set, applied on top of the above:
+
+- **Phone numbers moved off `profiles`.** `profiles` is readable by every
+  authenticated user (`USING (true)`), so a `phone` column on it was readable
+  by every signed-in account no matter what the UI rendered. Numbers now live
+  in `user_phones`, whose RLS admits only the owner and admins. The other
+  party on a job gets the number from the `reveal_job_phone()` database
+  function, which re-checks participation and job status server-side and
+  writes a row to `phone_reveals`. There is no other path to someone else's
+  number, so that audit log is complete.
+- **Account suspension.** `profiles.is_suspended` (plus `suspended_at` /
+  `suspended_reason`), writable only by admins and protected by the same
+  revert-on-write trigger as `is_admin`. Suspension is enforced in RLS —
+  a suspended account is refused job posts, new threads, messages and photo
+  uploads by the database itself, not by hidden buttons.
+- **Admin moderation.** The Users tab can suspend and un-suspend accounts and
+  take down portfolio photos; the Jobs tab can strip photos off a job. A new
+  "Phone log" tab shows the reveal audit trail.
+
+The SQL for all of this is in `supabase/migrations/`.

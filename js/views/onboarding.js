@@ -1,5 +1,5 @@
 import { state, notifyStateChange } from "../state.js";
-import { upsertProfile, upsertProDetails, uploadPublicFile } from "../db.js";
+import { upsertProfile, upsertProDetails, uploadPublicFile, saveMyPhone } from "../db.js";
 import { toast, escapeHtml, avatarHtml } from "../ui.js";
 import { navigate } from "../router.js";
 import { createMap, pinIcon } from "../leafletHelpers.js";
@@ -49,7 +49,7 @@ export function renderOnboarding() {
 
         <div class="field">
           <label>Phone (optional, shown once a job is accepted)</label>
-          <input type="tel" id="phone" value="${escapeHtml(state.profile?.phone || "")}" />
+          <input type="tel" id="phone" value="${escapeHtml(state.myPhone || "")}" />
         </div>
 
         <div class="field">
@@ -249,9 +249,10 @@ async function saveOnboarding() {
       avatar_url = url;
     }
 
+    state.myPhone = await saveMyPhone(state.user.id, phone);
+
     state.profile = await upsertProfile(state.user.id, {
       full_name: fullName,
-      phone,
       is_pro: isPro,
       lat: picked.lat,
       lng: picked.lng,

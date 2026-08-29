@@ -1,4 +1,4 @@
-import { sb, getProfile, getProDetails, getSession } from "./db.js";
+import { sb, getProfile, getProDetails, getSession, getMyPhone } from "./db.js";
 import { state, notifyStateChange } from "./state.js";
 import { DEFAULT_RADIUS_KM } from "./config.js";
 import { getCurrentPosition } from "./geo.js";
@@ -22,6 +22,7 @@ export async function bootSession() {
     } else {
       state.profile = null;
       state.proDetails = null;
+      state.myPhone = "";
     }
     notifyStateChange();
   });
@@ -35,6 +36,12 @@ export async function loadProfileIntoState() {
       state.proDetails = await getProDetails(state.user.id);
     } else {
       state.proDetails = null;
+    }
+    // Phone lives in its own table now, so it needs a second read.
+    try {
+      state.myPhone = await getMyPhone(state.user.id);
+    } catch (err) {
+      state.myPhone = "";
     }
     if (state.profile && state.profile.lat != null && state.profile.lng != null) {
       state.myLocation = { lat: state.profile.lat, lng: state.profile.lng };
